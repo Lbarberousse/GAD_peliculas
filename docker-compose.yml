@@ -70,8 +70,10 @@ services:
       /bin/sh -c "
       until mc alias set myminio http://minio:9000 admin password; do sleep 2; done;
       mc mb --ignore-existing myminio/warehouse;
-      mc mb --ignore-existing myminio/seed;
-      mc cp --recursive /seed-data/ myminio/seed/;
+      mc rm --recursive --force myminio/warehouse/raw;
+      mc rm --recursive --force myminio/warehouse/clean;
+      mc cp --recursive /seed-data/raw/ myminio/warehouse/raw/;
+      mc cp --recursive /seed-data/clean/ myminio/warehouse/clean/;
       exit 0;
       "
     volumes:
