@@ -1,140 +1,135 @@
 services:
-
-# Nessie Catalog Server 
   nessie:
     image: projectnessie/nessie:latest
-    container_name: nessie
-    ports:
-      - "19120:19120"  # Expose Nessie API port
     depends_on:
       - nessie-data
     environment:
-      - NESSIE_VERSION_STORE_TYPE=JDBC
-      - QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://nessie-data:5432/nessie
-      - QUARKUS_DATASOURCE_USERNAME=nessie
-      - QUARKUS_DATASOURCE_PASSWORD=password
-      - QUARKUS_PROFILE=prod
-      - QUARKUS_HTTP_PORT=19120
-      - QUARKUS_LOG_CONSOLE_FORMAT=%d{yyyy-MM-dd HH:mm:ss} %-5p [%c{1.}] (%t) %s%e%n
-      - QUARKUS_LOG_LEVEL=INFO
-      - NESSIE_VERSION_STORE_GARBAGE_COLLECTION_ENABLED=false  
-      - NESSIE_VERSION_STORE_RETENTION_DURATION=P30D  
-
+      NESSIE_VERSION_STORE_TYPE: JDBC
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://nessie-data:5432/nessie
+      QUARKUS_DATASOURCE_USERNAME: nessie
+      QUARKUS_DATASOURCE_PASSWORD: password
+      QUARKUS_PROFILE: prod
+      QUARKUS_HTTP_PORT: 19120
+      QUARKUS_LOG_CONSOLE_FORMAT: "%d{yyyy-MM-dd HH:mm:ss} %-5p [%c{1.}] (%t) %s%e%n"
+      QUARKUS_LOG_LEVEL: INFO
+      NESSIE_VERSION_STORE_GARBAGE_COLLECTION_ENABLED: "false"
+      NESSIE_VERSION_STORE_RETENTION_DURATION: P30D
+    ports:
+      - "19120:19120"
     networks:
-      dremio-pg-superset:
+      - dremio-pg-superset
 
   nessie-data:
-    image: postgres:13  # prueba para ver si sólo es posible con v13
+    image: postgres:13
     environment:
       POSTGRES_USER: nessie
       POSTGRES_PASSWORD: password
       POSTGRES_DB: nessie
     volumes:
-      - nessie_data_volume:/var/lib/postgresql/data:rw
+      - nessie_data_volume:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     networks:
-      pgnetwork:
-      dremio-pg-superset:
+      - pgnetwork
+      - dremio-pg-superset
 
   pgadmin:
     image: dpage/pgadmin4
-    container_name: pgadmin
+    depends_on:
+      - nessie-data
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
       - "8081:80"
-    depends_on:
-      - nessie-data  # Ensures pgAdmin starts after PostgreSQL
     networks:
       - pgnetwork
 
-
-  # Minio Storage Server
   minio:
     image: minio/minio:latest
-    container_name: minio
-    volumes:
-      - ~/minio/data:/data
+    command: server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=admin
-      - MINIO_ROOT_PASSWORD=password
-      - MINIO_DOMAIN=storage
-      - MINIO_REGION_NAME=us-east-1
-      - MINIO_REGION=us-east-1
-    networks:
-      dremio-pg-superset:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
+      MINIO_DOMAIN: storage
+      MINIO_REGION_NAME: us-east-1
+      MINIO_REGION: us-east-1
+    volumes:
+      - ./minio/data:/data
     ports:
-      - 9001:9001
-      - 9000:9000
-    command: ["server", "/data", "--console-address", ":9001"]
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - dremio-pg-superset
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
     entrypoint: >
       /bin/sh -c "
-      minio server /data --console-address ':9001' &
-      sleep 5;
-      mc alias set myminio http://localhost:9000 admin password;
-      mc mb myminio/warehouse;
-      mc mb myminio/seed;
-      mc cp /data/* myminio/seed/;
-      tail -f /dev/null"
+      until mc alias set myminio http://minio:9000 admin password; do sleep 2; done;
+      mc mb --ignore-existing myminio/warehouse;
+      mc mb --ignore-existing myminio/seed;
+      mc cp --recursive /seed-data/ myminio/seed/;
+      exit 0;
+      "
+    volumes:
+      - ./data:/seed-data:ro
+    networks:
+      - dremio-pg-superset
 
-  # Dremio
   dremio:
-    platform: linux/x86_64
     image: dremio/dremio-oss:latest
+    platform: linux/x86_64
     hostname: dremio
-    ports:
-      - 9047:9047
-      - 31010:31010
-      - 32010:32010
-      - 45678:45678
-    container_name: dremio
+    depends_on:
+      - minio
+      - minio-init
+      - nessie
     environment:
-      - DREMIO_JAVA_SERVER_EXTRA_OPTS=-Dpaths.dist=file:///opt/dremio/data/dist
-      - dremio.iceberg.enabled=true
-      - dremio.execution.support_unlimited_splits=true
-  # Add these configurations
-      - DREMIO_JAVA_EXTRA_OPTS=-Dfs.s3a.path.style.access=true -Dfs.s3a.endpoint=http://minio:9000
-      - AWS_ACCESS_KEY_ID=admin
-      - AWS_SECRET_ACCESS_KEY=password
-      - DREMIO_JAVA_SERVER_EXTRA_OPTS=-Ddremio.nessie.defaultBranch=main -Ddremio.nessie.authentication.enabled=false
-      - dremio.nessie.client.readTimeout=30000
-      - dremio.nessie.client.writeTimeout=30000
+      DREMIO_JAVA_EXTRA_OPTS: >-
+        -Dpaths.dist=file:///opt/dremio/data/dist
+        -Dfs.s3a.path.style.access=true
+        -Dfs.s3a.endpoint=http://minio:9000
+        -Ddremio.nessie.defaultBranch=main
+        -Ddremio.nessie.authentication.enabled=false
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password
+    ports:
+      - "9047:9047"
+      - "31010:31010"
+      - "32010:32010"
+      - "45678:45678"
     volumes:
       - ./dremio/data:/opt/dremio/data
       - ./dremio/lib:/var/lib/dremio
       - ./dremio/local:/localFiles
     networks:
-      dremio-pg-superset:
+      - dremio-pg-superset
 
-  
-  #Superset
   superset:
     image: alexmerced/dremio-superset
-    container_name: superset
-    networks:
-      dremio-pg-superset:
-    ports:
-      - 8082:8088
-    environment:
-      - DATABASE_DB=nessie
-      - DATABASE_HOST=nessie-data
-      - DATABASE_PASSWORD=password
-      - DATABASE_USER=nessie
-      - DATABASE_PORT=5432
-    volumes:
-      - superset_data:/app/superset_home
     depends_on:
       - nessie-data
+    environment:
+      DATABASE_DB: nessie
+      DATABASE_HOST: nessie-data
+      DATABASE_PASSWORD: password
+      DATABASE_USER: nessie
+      DATABASE_PORT: 5432
+    volumes:
+      - superset_data:/app/superset_home
+    ports:
+      - "8082:8088"
+    networks:
+      - dremio-pg-superset
+
 networks:
   dremio-pg-superset:
   pgnetwork:
     driver: bridge
-  mynetwork:
+
 volumes:
-  dbdata6:
-  postgres_data:
-  db-data:
   nessie_data_volume:
   superset_data:
