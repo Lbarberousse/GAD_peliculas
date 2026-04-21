@@ -136,17 +136,19 @@ def plot_top_actors(df_actors):
 def limpiar_movies(df):
     df = df.copy()
 
+    df["minute"] = pd.to_numeric(df["minute"], errors="coerce")
+    df["date"] = pd.to_numeric(df["date"], errors="coerce")
+    df["rating"] = pd.to_numeric(df["rating"], errors="coerce")
+
     df = df[
         (df["minute"] > 0) &
-        (df["minute"] <= 500) &
+        (df["minute"] < 300) &
         (df["date"].notna()) &
         (df["name"].notna())
     ]
 
     columnas_drop = [c for c in ["description", "tagline"] if c in df.columns]
     df = df.drop(columns=columnas_drop)
-
-    df["minute"] = df["minute"].fillna(df["minute"].median())
 
     return df
 
