@@ -113,17 +113,29 @@ services:
   superset:
     image: alexmerced/dremio-superset
     depends_on:
-      - nessie-data
+      - superset-data
+      - dremio
     environment:
-      DATABASE_DB: nessie
-      DATABASE_HOST: nessie-data
+      DATABASE_DB: superset
+      DATABASE_HOST: superset-data
       DATABASE_PASSWORD: password
-      DATABASE_USER: nessie
+      DATABASE_USER: superset
       DATABASE_PORT: 5432
     volumes:
       - superset_data:/app/superset_home
     ports:
       - "8082:8088"
+    networks:
+      - dremio-pg-superset
+
+  superset-data:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: superset
+    volumes:
+      - superset_db_volume:/var/lib/postgresql/data
     networks:
       - dremio-pg-superset
 
@@ -135,3 +147,4 @@ networks:
 volumes:
   nessie_data_volume:
   superset_data:
+  superset_db_volume:
